@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-
-import uvicorn
-from fastapi import FastAPI, Query
-import requests
 import re
 import sqlite3
-import distance
 import collections
+import uvicorn
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+import requests
+import distance
 import urllib3
+
 urllib3.disable_warnings()
 
 DATABASE_LOCAL = sqlite3.connect('db.sqlite3', check_same_thread=False)
 sqlite3_cursor = DATABASE_LOCAL.cursor()
-
-from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
     "http://localhost.tiangolo.com",
@@ -37,12 +36,14 @@ app.add_middleware(
 )
 
 
-def sql_insert(q, title_, data):
-    sqlite3_cursor.execute("""INSERT OR IGNORE INTO scan (link, title, text) VALUES (?,?,?)""", (q, title_, data))
+def sql_insert(link_, title_, data):
+    """Adding new entries to the database: (link, title, text)"""
+    sqlite3_cursor.execute("""INSERT OR IGNORE INTO scan (link, title, text) VALUES (?,?,?)""", (link_, title_, data))
     DATABASE_LOCAL.commit()
 
 
 def search_by_words():
+    """Uploading entries from the database: (link, title, text)"""
     sqlite3_cursor.execute("""select link, title, text from scan""")
     data = sqlite3_cursor.fetchall()
     return data
@@ -66,6 +67,7 @@ def search_by_words():
 
 
 def shorter_link(link):
+    """Removing prefixes from links"""
     print('input link: ', link)
     if link[:8] == 'https://':
         link = link[8:]
@@ -82,6 +84,7 @@ def shorter_link(link):
 
 
 def get_data_from_response(link):
+    """Extracting data (title, text) from a response"""
     response = requests.get(link, timeout=30, verify=False)
     title = re.search(r'<title>(.*?)</title>', response.content.decode('utf-8')).group(0)[7:-8]
     data = re.sub(r'\<(.*?)\>|\n', '', response.content.decode('utf-8'))
@@ -93,6 +96,7 @@ def get_data_from_response(link):
 @app.get('/index/')
 def input_link(q: str = Query(None, min_length=4, description='Input in this query your link',
                               regex="http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+")):
+    """Adding new links for processing (http://127.0.0.1:8000/index/?q={valid url})"""
     if q:
         title, data = get_data_from_response(q)
         q = shorter_link(q)
@@ -103,18 +107,15 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
             url_list_depth = [[] for i in range(0, depth + 1)]
             url_list_depth[0].append(f'https://{q}')
             for depth_i in range(0, depth):
-                print('depth_i ', depth_i)
                 for links in url_list_depth[depth_i]:
-                    print('links ', links)
                     domain = re.search(r'^((http[s]?):\/)?\/?([^:\/\s]+)', links).group(3)
                     response = requests.get(links, verify=False, timeout=30).content.decode('utf-8')
                     outside_links = list(set(map(lambda link: link[1],
-                                                re.findall(r'(<a.*href=\")(htt.*?)(\")', response))))
+                                                 re.findall(r'(<a.*href=\")(htt.*?)(\")', response))))
                     inside_links = list(set(map(lambda link: f'https://{domain}{link[1]}',
                                                 re.findall(r'(<a.*href=\")(/\w+.*?)(\")', response))))
                     inside_links.extend(outside_links)
                     for link in inside_links:
-                        print('!!! ', link)
                         flag = False
                         for item in url_list_depth:
                             for l in item:
@@ -125,11 +126,10 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
                             url_list_depth[depth_i + 1].append(link)
                             try:
                                 title, data = get_data_from_response(link)
-                                print('url_new: ', link)
                                 url_new = shorter_link(link)
                                 sql_insert(url_new, title, data)
                             except:
-                                print('JS')
+                                print('Link already in DB')
             return url_list_depth
         except Exception as e:
             print(e)
@@ -138,41 +138,20 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
 
 @app.get('/search/')
 def search(q: str = Query('', min_length=4, description='Поиск')):
+    """Get entries with searched words http://127.0.0.1:8000/search/?q={words}"""
     data_rows = search_by_words()
     similarity = {}
     for data_row in data_rows:
-        similarity[distance.levenshtein(q, data_row[2])] = {"link": data_row[0], "title": data_row[1]}
-    od = collections.OrderedDict(sorted(similarity.items(), reverse=False))
-    result_list = list(map(lambda x: od[x], list(od)))
-    # Чем меньше - тем лучше
+        similarity[distance.levenshtein(q, data_row[2])] = {"link": f'https://{data_row[0]}', "title": data_row[1]}
+    ordered_dict = collections.OrderedDict(sorted(similarity.items(), reverse=False))
+    result_list = list(map(lambda x: ordered_dict[x], list(ordered_dict)))
+    # Less is better
     return result_list[:11]
 
 
-@app.get('/test/')
-def test(q: str = Query(None, min_length=4, description='Input in this query your link',
-                        regex="http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+")):
-    depth = 3  # 3 levels
-    domain = re.search(r'^((http[s]?|ftp):\/)?\/?([^:\/\s]+)', q).group(3)
-    url_list_depth = [[] for i in range(0, depth + 1)]
-    url_list_depth[0].append(q)
-    print(domain)
-    for depth_i in range(0, depth):
-        for links in url_list_depth[depth_i]:
-            response = requests.get(q).content.decode('utf-8')
-            tags = re.findall(r'(<a.*href=\")(/\w+.*?)(\")', response)
-            for link in tags:
-                url_new = link[1]
-                flag = False
-                for item in url_list_depth:
-                    for l in item:
-                        if url_new == l:
-                            flag = True
-                url_new = f'https://{domain}{url_new}'
-                if url_new is not None and flag is False and url_new not in url_list_depth[depth_i + 1] and len(
-                        requests.get(url_new, verify=False, timeout=30).history) == 0:
-                    url_list_depth[depth_i + 1].append(url_new)
-                    print(links, "->", url_new)
-    return {"search": url_list_depth}
+# TODO add async and .lower
+# TODO +выбор глубины, пагинации и сортировка
+# TODO выводить описание часть текста, где были найдены пересечения
 
 
 if __name__ == "__main__":
