@@ -2,7 +2,6 @@
 import re
 import sqlite3
 import collections
-import uvicorn
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -11,7 +10,7 @@ import urllib3
 
 urllib3.disable_warnings()
 
-DATABASE_LOCAL = sqlite3.connect('db.sqlite3', check_same_thread=False)
+DATABASE_LOCAL = sqlite3.connect('../app/db.sqlite3', check_same_thread=False)
 sqlite3_cursor = DATABASE_LOCAL.cursor()
 
 origins = [
@@ -49,23 +48,6 @@ def search_by_words():
     return data
 
 
-# TODO Реализовать обрезку ссылки от мусора перед инсертом
-
-# TODO Добавить запись внутренних ссылок в отдельную базу
-
-# TODO Дописать ф-ю поиска (post) и возврата совпадающих статей по миниматьной расхождения
-
-# TODO Написать обработку шаблонов и выведения совпадающих пересечений
-
-# TODO Реализовать пагинацию
-
-# TODO Добавить рекурсивную индексацию только для внутренних ссылкок
-
-# TODO Добавить коментарии к функциям
-
-# TODO Добавить поиск ссылок на внутренних ссылках
-
-
 def shorter_link(link):
     """Removing prefixes from links"""
     print('input link: ', link)
@@ -85,17 +67,17 @@ def shorter_link(link):
 
 def get_data_from_response(link):
     """Extracting data (title, text) from a response"""
-    response = requests.get(link, timeout=30, verify=False)
-    title = re.search(r'<title>(.*?)</title>', response.content.decode('utf-8')).group(0)[7:-8]
-    data = re.sub(r'\<(.*?)\>|\n', '', response.content.decode('utf-8'))
+    response = requests.get(link, timeout=60, verify=False).content.decode('utf-8')
+    title = re.search(r'<title>(.*?)</title>', response).group(0)[7:-8]
+    data = re.sub(r'\<(.*?)\>|\n', '', response)
     data = re.sub(r'<script>(.*?)</script>', '', data)
     data = re.sub(r'\s{2,}', ' ', data).replace('"', "'")
     return title, data
 
 
 @app.get('/index/')
-def input_link(q: str = Query(None, min_length=4, description='Input in this query your link',
-                              regex="http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+")):
+async def input_link(q: str = Query(None, min_length=4, description='Input in this query your link',
+                                    regex="http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+")):
     """Adding new links for processing (http://127.0.0.1:8000/index/?q={valid url})"""
     if q:
         title, data = get_data_from_response(q)
@@ -109,7 +91,10 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
             for depth_i in range(0, depth):
                 for links in url_list_depth[depth_i]:
                     domain = re.search(r'^((http[s]?):\/)?\/?([^:\/\s]+)', links).group(3)
-                    response = requests.get(links, verify=False, timeout=30).content.decode('utf-8')
+                    try:
+                        response = requests.get(links, verify=False, timeout=60).content.decode('utf-8')
+                    except Exception as e:
+                        print(e)
                     outside_links = list(set(map(lambda link: link[1],
                                                  re.findall(r'(<a.*href=\")(htt.*?)(\")', response))))
                     inside_links = list(set(map(lambda link: f'https://{domain}{link[1]}',
@@ -122,7 +107,7 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
                                 if link == l:
                                     flag = True
                         if link is not None and flag is False and link not in url_list_depth[depth_i + 1] and len(
-                                requests.get(link, verify=False, timeout=30).history) == 0:
+                                requests.get(link, verify=False, timeout=60).history) == 0:
                             url_list_depth[depth_i + 1].append(link)
                             try:
                                 title, data = get_data_from_response(link)
@@ -133,26 +118,18 @@ def input_link(q: str = Query(None, min_length=4, description='Input in this que
             return url_list_depth
         except Exception as e:
             print(e)
-    return "Start page"
+    return "Please, enter new link"
 
 
 @app.get('/search/')
-def search(q: str = Query('', min_length=4, description='Поиск')):
+async def search(q: str = Query('', min_length=4, description='Поиск')):
     """Get entries with searched words http://127.0.0.1:8000/search/?q={words}"""
     data_rows = search_by_words()
     similarity = {}
     for data_row in data_rows:
-        similarity[distance.levenshtein(q, data_row[2])] = {"link": f'https://{data_row[0]}', "title": data_row[1]}
+        similarity[distance.levenshtein(q.lower(), data_row[2].lower())] = {"link": f'https://{data_row[0]}',
+                                                                            "title": data_row[1]}
     ordered_dict = collections.OrderedDict(sorted(similarity.items(), reverse=False))
     result_list = list(map(lambda x: ordered_dict[x], list(ordered_dict)))
     # Less is better
     return result_list[:11]
-
-
-# TODO add async and .lower
-# TODO +выбор глубины, пагинации и сортировка
-# TODO выводить описание часть текста, где были найдены пересечения
-
-
-# if __name__ == "__main__":
-#     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True, access_log=False)
