@@ -154,5 +154,5 @@ def search(q: str = Query('', min_length=4, description='Поиск')):
 # TODO выводить описание часть текста, где были найдены пересечения
 
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True, access_log=False)
+# if __name__ == "__main__":
+#     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True, access_log=False)
