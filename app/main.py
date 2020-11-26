@@ -50,7 +50,6 @@ def search_by_words():
 
 def shorter_link(link):
     """Removing prefixes from links"""
-    print('input link: ', link)
     if link[:8] == 'https://':
         link = link[8:]
     elif link[:7] == 'http://':
@@ -61,18 +60,20 @@ def shorter_link(link):
         link = link[4:]
     if link[-1] == '/':
         link = link[:-1]
-    print('output link: ', link)
     return link
 
 
 def get_data_from_response(link):
     """Extracting data (title, text) from a response"""
-    response = requests.get(link, timeout=60, verify=False).content.decode('utf-8')
-    title = re.search(r'<title>(.*?)</title>', response).group(0)[7:-8]
-    data = re.sub(r'\<(.*?)\>|\n', '', response)
-    data = re.sub(r'<script>(.*?)</script>', '', data)
-    data = re.sub(r'\s{2,}', ' ', data).replace('"', "'")
-    return title, data
+    try:
+        response = requests.get(link, timeout=60, verify=False).content.decode('utf-8')
+        title = re.search(r'<title>(.*?)</title>', response).group(0)[7:-8]
+        data = re.sub(r'\<(.*?)\>|\n', '', response)
+        data = re.sub(r'<script>(.*?)</script>', '', data)
+        data = re.sub(r'\s{2,}', ' ', data).replace('"', "'")
+        return title, data
+    except:
+        pass
 
 
 @app.get('/index/')
@@ -82,7 +83,6 @@ async def input_link(q: str = Query(None, min_length=4, description='Input in th
     if q:
         title, data = get_data_from_response(q)
         q = shorter_link(q)
-        print("q: ", q)
         try:
             sql_insert(q, title, data)
             depth = 3
@@ -106,15 +106,18 @@ async def input_link(q: str = Query(None, min_length=4, description='Input in th
                             for l in item:
                                 if link == l:
                                     flag = True
-                        if link is not None and flag is False and link not in url_list_depth[depth_i + 1] and len(
-                                requests.get(link, verify=False, timeout=60).history) == 0:
-                            url_list_depth[depth_i + 1].append(link)
-                            try:
-                                title, data = get_data_from_response(link)
-                                url_new = shorter_link(link)
-                                sql_insert(url_new, title, data)
-                            except:
-                                print('Link already in DB')
+                        try:
+                            if link is not None and flag is False and link not in url_list_depth[depth_i + 1] and len(
+                                    requests.get(link, verify=False, timeout=60).history) == 0:
+                                url_list_depth[depth_i + 1].append(link)
+                                try:
+                                    title, data = get_data_from_response(link)
+                                    url_new = shorter_link(link)
+                                    sql_insert(url_new, title, data)
+                                except:
+                                    print('Link already in DB')
+                        except:
+                            print('connection error')
             return url_list_depth
         except Exception as e:
             print(e)
